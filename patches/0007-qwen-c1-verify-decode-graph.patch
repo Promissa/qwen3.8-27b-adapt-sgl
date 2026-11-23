@@ -1,0 +1,174 @@
+diff --git a/python/sglang/srt/environ.py b/python/sglang/srt/environ.py
+index 4b59dc6..6bebcc2 100644
+--- a/python/sglang/srt/environ.py
++++ b/python/sglang/srt/environ.py
+@@ -1731,6 +1731,8 @@ class Envs:
+     SGLANG_OPT_GDN_VERIFY_CONV_ORDER = EnvBool(False)
+     # Experimental SM120 FP8-KV verify tile matching grouped decode.
+     SGLANG_OPT_MHA_VERIFY_TILE32 = EnvBool(False)
++    SGLANG_OPT_MHA_VERIFY_DECODE = EnvBool(False)
++    SGLANG_OPT_MHA_VERIFY_GRAPH = EnvBool(False)
+     # A/B: keep the DFLASH draft greedy head eager (not folded in-graph).
+     SGLANG_DFLASH_EAGER_DRAFT_SAMPLER = EnvBool(False)
+     SGLANG_ENABLE_LILICORR_SAMPLING = EnvBool(False)
+diff --git a/python/sglang/srt/layers/attention/triton_backend.py b/python/sglang/srt/layers/attention/triton_backend.py
+index f10e02e..2da560e 100644
+--- a/python/sglang/srt/layers/attention/triton_backend.py
++++ b/python/sglang/srt/layers/attention/triton_backend.py
+@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, List, Optional
+ 
+ import torch
+ import triton
++import triton.language as tl
+ 
+ from sglang.kernels.ops.attention.metadata import get_num_kv_splits_triton
+ from sglang.kernels.ops.attention.mla_kv_pack_quantize_fp8 import (
+@@ -79,6 +80,37 @@ if TYPE_CHECKING:
+     from sglang.srt.speculative.spec_info import SpecInput
+ 
+ 
++
++@triton.jit
++def _build_c1_verify_decode_indices(
++    PrefixPtr, PrefixIds, DraftIds, Mask, Ptr, Ids, Splits,
++    ROWS: tl.constexpr, TILE: tl.constexpr, BLOCK: tl.constexpr,
++):
++    """Compact each query's shared prefix and its visible draft ancestors."""
++    row = tl.program_id(0)
++    part = tl.program_id(1)
++    prefix = tl.load(PrefixPtr + 1)
++    cols = tl.arange(0, ROWS)
++    # The deterministic Triton target uses FULL_MASK with an all-visible prefix.
++    mask_rows = tl.arange(0, ROWS)
++    ancestors = tl.load(Mask + mask_rows[:, None] * (prefix + ROWS) + prefix + cols[None, :]) != 0
++    counts = tl.sum(ancestors.to(tl.int32), axis=1)
++    start = row * prefix + tl.sum(tl.where(mask_rows < row, counts, 0), axis=0)
++    count = prefix + tl.sum(tl.where(mask_rows == row, counts, 0), axis=0)
++    for block in range(part, tl.cdiv(prefix, BLOCK), tl.num_programs(1)):
++        i = block * BLOCK + tl.arange(0, BLOCK)
++        values = tl.load(PrefixIds + i, mask=i < prefix, other=0)
++        tl.store(Ids + start + i, values, mask=i < prefix)
++    if part == 0:
++        visible = tl.load(Mask + row * (prefix + ROWS) + prefix + cols) != 0
++        offsets = tl.cumsum(visible.to(tl.int32)) - 1
++        tl.store(Ids + start + prefix + offsets, tl.load(DraftIds + cols), mask=visible)
++        tl.store(Ptr + row, start)
++        if row == ROWS - 1:
++            tl.store(Ptr + ROWS, start + count)
++        tl.store(Splits + row, tl.cdiv(count, TILE))
++
++
+ _MLA_DECODE_MIN_BLOCK_KV = 32
+ 
+ 
+@@ -236,6 +268,12 @@ class TritonAttnBackend(AttentionBackend):
+             else None
+         )
+         self.target_verify_num_tokens_per_req = model_runner.decode_num_tokens_per_req()
++        self.use_c1_verify_graph = (
++            envs.SGLANG_OPT_MHA_VERIFY_GRAPH.get()
++            and is_qwen3_5(model_runner.model_config.hf_config)
++            and not model_runner.is_draft_worker
++            and (model_runner.spec_algorithm.is_ngram() or model_runner.spec_algorithm.is_eagle())
++        )
+         self.speculative_num_steps = get_spec().speculative_num_steps
+         self.topk = get_spec().speculative_eagle_topk or 0
+         # Split-KV verify is bit-equivalent only for a pure-causal chain (topk==1)
+@@ -2285,6 +2323,46 @@ class TritonAttnBackend(AttentionBackend):
+                 "sliding-window write loc"
+             )
+ 
++        if forward_batch.forward_mode.is_target_verify() and self.use_c1_verify_graph:
++            rows = q.shape[0]
++            mask = self.forward_metadata.custom_mask
++            if (bs != 1 or not self.enable_deterministic or self.page_size != 1
++                    or self.use_mla or self.dcp_size != 1 or sliding_window_size != -1
++                    or sinks is not None or score_mod is not None or not causal
++                    or rows != 4 or mask is None or mask.dtype not in (torch.bool, torch.uint8)):
++                raise ValueError(
++                    f"Graph verify requires deterministic full-mask C1/D4 MHA: {bs=}, "
++                    f"{rows=}, {causal=}, {sliding_window_size=}, "
++                    f"mask_dtype={None if mask is None else mask.dtype}"
++                )
++            workspace = getattr(self, "_c1_verify_workspace", None)
++            if workspace is None:
++                head_shape = (rows, layer.tp_q_head_num, self.max_kv_splits)
++                workspace = (
++                    torch.empty(rows + 1, dtype=torch.int32, device=q.device),
++                    torch.empty(rows * (self.max_context_len + rows), dtype=torch.int32, device=q.device),
++                    torch.empty(rows, dtype=torch.int32, device=q.device),
++                    torch.empty((*head_shape, layer.v_head_dim), dtype=torch.float32, device=q.device),
++                    torch.empty(head_shape, dtype=torch.float32, device=q.device),
++                    torch.zeros(1, dtype=torch.int32, device=q.device),
++                )
++                self._c1_verify_workspace = workspace
++            ptr, indices, splits, mid, lse, uneven = workspace
++            _build_c1_verify_decode_indices[(rows, 8)](
++                prefix_kv_indptr, prefix_kv_indices, extend_kv_indices, mask, ptr,
++                indices, splits, rows, self.split_tile_size, 128,
++            )
++            self.decode_attention_fwd(
++                q.view(-1, layer.tp_q_head_num, layer.qk_head_dim),
++                self.kv_layers.read(layer.layer_id).key(), self.kv_layers.read(layer.layer_id).value(),
++                o.view(-1, layer.tp_q_head_num, layer.v_head_dim), ptr, indices, mid, lse,
++                splits, self.max_kv_splits, layer.scaling, layer.k_scale_float if layer.k_scale is not None else 1.0,
++                layer.v_scale_float if layer.v_scale is not None else 1.0,
++                logit_cap=logits_soft_cap, xai_temperature_len=layer.xai_temperature_len,
++                has_mla=False, use_pdl=self.use_pdl, page_size=1, enable_lean=False, uneven_batch=uneven,
++            )
++            return o
++
+         # Capture batches may not have a spec_info, so use the attention
+         # metadata's resolved uniform verify width when extend lengths are absent.
+         if forward_batch.extend_seq_lens is None:
+@@ -2332,6 +2410,50 @@ class TritonAttnBackend(AttentionBackend):
+             k_descale = 1.0
+             v_descale = 1.0
+ 
++        if forward_batch.forward_mode.is_target_verify() and envs.SGLANG_OPT_MHA_VERIFY_DECODE.get():
++            if (bs != 1 or not self.enable_deterministic or self.page_size != 1
++                    or self.use_mla or self.dcp_size != 1 or sliding_window_size != -1
++                    or sinks is not None or score_mod is not None or not causal
++                    or torch.cuda.is_current_stream_capturing()):
++                raise ValueError("Verify decode experiment requires eager deterministic C1 full MHA")
++            metadata = self.forward_metadata
++            rail = getattr(metadata, "verify_decode_rail", None)
++            if rail is None:
++                rows = q.shape[0]
++                prefix = int(prefix_lens[0].item())
++                locations = unified_kv_indices[:prefix + rows]
++                if metadata.custom_mask is None:
++                    visible = torch.arange(prefix + rows, device=q.device)[None, :] <= (
++                        prefix + torch.arange(rows, device=q.device)[:, None])
++                else:
++                    visible = metadata.custom_mask[:rows * (prefix + rows)].bool().reshape(rows, prefix + rows)
++                counts = visible.sum(1).to(torch.int32)
++                if not bool(visible[:, :prefix].all()) or not torch.equal(
++                        counts.long() - 1, forward_batch.positions.long()):
++                    raise ValueError("Verify tree does not represent ordinary prefix decode positions")
++                indices = locations.expand(rows, -1)[visible].contiguous()
++                ptr = torch.cat([torch.zeros(1, dtype=torch.int32, device=q.device),
++                                 counts.cumsum(0).to(torch.int32)])
++                splits = (counts + self.split_tile_size - 1) // self.split_tile_size
++                mid = torch.empty((rows, layer.tp_q_head_num, self.max_kv_splits, layer.v_head_dim),
++                                  dtype=torch.float32, device=q.device)
++                lse = torch.empty((rows, layer.tp_q_head_num, self.max_kv_splits),
++                                  dtype=torch.float32, device=q.device)
++                rail = ptr, indices, splits, mid, lse
++                metadata.verify_decode_rail = rail
++            ptr, indices, splits, mid, lse = rail
++            self.decode_attention_fwd(
++                q.view(-1, layer.tp_q_head_num, layer.qk_head_dim),
++                self.kv_layers.read(layer.layer_id).key(),
++                self.kv_layers.read(layer.layer_id).value(),
++                o.view(-1, layer.tp_q_head_num, layer.v_head_dim),
++                ptr, indices, mid, lse, splits, self.max_kv_splits,
++                layer.scaling, k_descale, v_descale, logit_cap=logits_soft_cap,
++                xai_temperature_len=layer.xai_temperature_len,
++                has_mla=False, use_pdl=self.use_pdl, page_size=1,
++                enable_lean=False, uneven_batch=torch.zeros(1, dtype=torch.int32, device=q.device))
++            return o
++
+         # Call unified kernel
+         self.extend_attention_fwd_unified(
+             q.view(-1, layer.tp_q_head_num, layer.qk_head_dim),

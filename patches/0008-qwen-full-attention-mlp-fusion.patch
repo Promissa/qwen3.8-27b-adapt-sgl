@@ -1,0 +1,25 @@
+diff --git a/python/sglang/srt/environ.py b/python/sglang/srt/environ.py
+index 6bebcc2..1bcd9d7 100644
+--- a/python/sglang/srt/environ.py
++++ b/python/sglang/srt/environ.py
+@@ -1733,6 +1733,7 @@ class Envs:
+     SGLANG_OPT_MHA_VERIFY_TILE32 = EnvBool(False)
+     SGLANG_OPT_MHA_VERIFY_DECODE = EnvBool(False)
+     SGLANG_OPT_MHA_VERIFY_GRAPH = EnvBool(False)
++    SGLANG_OPT_QWEN_FULL_MLP_FP4_FUSION = EnvBool(False)
+     # A/B: keep the DFLASH draft greedy head eager (not folded in-graph).
+     SGLANG_DFLASH_EAGER_DRAFT_SAMPLER = EnvBool(False)
+     SGLANG_ENABLE_LILICORR_SAMPLING = EnvBool(False)
+diff --git a/python/sglang/srt/models/qwen3_5.py b/python/sglang/srt/models/qwen3_5.py
+index 63e6641..8b3155e 100644
+--- a/python/sglang/srt/models/qwen3_5.py
++++ b/python/sglang/srt/models/qwen3_5.py
+@@ -1384,6 +1384,8 @@ class Qwen3_5AttentionDecoderLayer(nn.Module):
+                 # The stage boundary completes this stage's sum.
+                 reduce_results=False,
+             )
++            if envs.SGLANG_OPT_QWEN_FULL_MLP_FP4_FUSION.get():
++                maybe_enable_silu_fp4_quant_fusion(self.mlp)
+         elif _qwen3_5_is_moe(config):
+             self.mlp = Qwen2MoeSparseMoeBlock(
+                 layer_id=layer_id,

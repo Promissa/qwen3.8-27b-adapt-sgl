@@ -1,0 +1,56 @@
+diff --git a/python/sglang/srt/environ.py b/python/sglang/srt/environ.py
+--- a/python/sglang/srt/environ.py
++++ b/python/sglang/srt/environ.py
+@@ -1729,6 +1729,8 @@
+     SGLANG_OPT_GDN_VERIFY_MATCH_PACKED = EnvBool(False)
+     # Preserve decode's oldest-to-newest Conv1D sum in GDN tree verification.
+     SGLANG_OPT_GDN_VERIFY_CONV_ORDER = EnvBool(False)
++    # Experimental SM120 FP8-KV verify tile matching grouped decode.
++    SGLANG_OPT_MHA_VERIFY_TILE32 = EnvBool(False)
+     # A/B: keep the DFLASH draft greedy head eager (not folded in-graph).
+     SGLANG_DFLASH_EAGER_DRAFT_SAMPLER = EnvBool(False)
+     SGLANG_ENABLE_LILICORR_SAMPLING = EnvBool(False)
+diff --git a/python/sglang/srt/layers/attention/triton_backend.py b/python/sglang/srt/layers/attention/triton_backend.py
+--- a/python/sglang/srt/layers/attention/triton_backend.py
++++ b/python/sglang/srt/layers/attention/triton_backend.py
+@@ -2357,6 +2357,12 @@
+             page_size=self.page_size,
+             score_mod=score_mod,
+             aux_tensors=aux_tensors,
++            kv_tile_size=(
++                32
++                if forward_batch.forward_mode.is_target_verify()
++                and envs.SGLANG_OPT_MHA_VERIFY_TILE32.get()
++                else None
++            ),
+         )
+ 
+         return o
+diff --git a/python/sglang/kernels/ops/attention/extend_attention.py b/python/sglang/kernels/ops/attention/extend_attention.py
+--- a/python/sglang/kernels/ops/attention/extend_attention.py
++++ b/python/sglang/kernels/ops/attention/extend_attention.py
+@@ -1530,6 +1530,7 @@
+     page_size: int = 1,
+     score_mod=None,
+     aux_tensors=None,
++    kv_tile_size=None,
+ ):
+     """
+     Unified 1-stage extend attention for deterministic inference.
+@@ -1561,6 +1562,16 @@
+     BLOCK_DMODEL, BLOCK_DPE, BLOCK_DV, BLOCK_M, BLOCK_N, num_warps = (
+         _get_block_sizes_for_extend_attention(Lq, Lv)
+     )
++    if kv_tile_size is not None:
++        if not (
++            kv_tile_size == 32
++            and current_arch().is_sm(12)
++            and Lq == Lv == 256
++            and k_buffer.dtype == torch.float8_e4m3fn
++            and v_buffer.dtype == torch.float8_e4m3fn
++        ):
++            raise ValueError("Verify tile override requires SM120 FP8 KV, head_dim256")
++        BLOCK_N = kv_tile_size
+     if _is_gfx95 and Lq <= 128 and Lv <= 128 and BLOCK_N == 64:
+         # gfx950, head_dim <= 128: each workgroup streams the whole prefix, so a 256-row query tile
+         # cuts the KV bytes read per query row 4x. BLOCK_N, and so the reduction order, is unchanged:

@@ -1,0 +1,9 @@
+{
+  "sha256": "3bc6b9229681b5fc19f04ff8d5b12cca7417202ed1d51a3c99d2e049e21da888",
+  "expected_description": [
+    "red square",
+    "blue circle"
+  ],
+  "frame": 38,
+  "scope": "Reconstructed from the failed run generator; original failed response/image digest was not retained. All38 preceding image hashes reproduce exactly."
+}

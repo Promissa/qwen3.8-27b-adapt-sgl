@@ -1,0 +1,38 @@
+--- a/python/sglang/srt/speculative/eagle_worker_v2.py
++++ b/python/sglang/srt/speculative/eagle_worker_v2.py
+@@ -260,7 +260,23 @@
+             )
+         embed, _ = self._resolve_shared_embed_and_head()
+         draft_embed = self.draft_runner.model.model.embed_tokens.weight
+-        if (
++        from sglang.srt.layers.quantization.modelopt_quant import ModelOptNvFp4EmbeddingMethod
++
++        target_embed = None
++        if embed is not None and embed.dtype == torch.uint8:
++            getter = getattr(self.target_worker.model_runner.model, "get_input_embeddings", None)
++            target_embed = getter() if getter is not None else None
++        packed = isinstance(getattr(target_embed, "quant_method", None), ModelOptNvFp4EmbeddingMethod)
++        if packed:
++            if (
++                embed is not target_embed.weight
++                or target_embed.quant_method.params_dtype != draft_embed.dtype
++                or (target_embed.num_embeddings_per_partition, target_embed.embedding_dim)
++                != draft_embed.shape
++                or self.draft_runner.model.config.tie_word_embeddings
++            ):
++                raise ValueError("Incompatible NVFP4 embedding for Qwen MTP")
++        elif (
+             embed is None
+             or not embed.is_floating_point()
+             or embed.shape != draft_embed.shape
+@@ -271,6 +287,10 @@
+         # profiling so its replaced embedding/head are no longer charged.
+         self.init_token_map()
+         self.init_lm_head()
++        if packed:
++            # The gather needs the target's scales and E2M1 table as well as its weights.
++            self.draft_runner.model.model.embed_tokens = target_embed
++            logger.info("Shared NVFP4 gather module with the Qwen MTP draft")
+         current_platform.empty_cache()
+         self._shared_weights_initialized = True
+         logger.info("Shared Qwen MTP embedding/head before target KV sizing")

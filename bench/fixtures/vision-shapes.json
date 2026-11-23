@@ -1,0 +1,13 @@
+{
+  "file": "vision-shapes.png",
+  "sha256": "10db84965847c331ce44782a9429785145fcf2e9b92d6dcf6b838ae4f53c2ff1",
+  "dimensions": [
+    512,
+    320
+  ],
+  "expected_description": [
+    "red square",
+    "blue circle"
+  ],
+  "background": "white"
+}

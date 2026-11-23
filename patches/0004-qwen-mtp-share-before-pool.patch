@@ -1,0 +1,76 @@
+--- a/python/sglang/srt/environ.py
++++ b/python/sglang/srt/environ.py
+@@ -1600,6 +1600,9 @@
+     # (see sanitize_nan_logits).
+     SGLANG_SANITIZE_NAN_LOGITS = EnvBool(False)
+     SGLANG_ENABLE_LOGPROB_CHUNK = EnvBool(True)
++    # Experimental Qwen MTP lifecycle fix: release duplicate shared weights
++    # before target KV sizing. Guarded to synchronous TP1/PP1 EAGLE startup.
++    SGLANG_OPT_QWEN_MTP_EARLY_SHARE = EnvBool(False)
+     SGLANG_LOGPROB_CHUNK_SIZE = EnvInt(2048)
+     # Compute input logprobs from logits via per-row logsumexp instead of
+     # materializing the full-vocab log-softmax. Escape hatch only; the two
+diff --git a/python/sglang/srt/speculative/eagle_worker_v2.py b/python/sglang/srt/speculative/eagle_worker_v2.py
+index 81a579905b..9d8b6823db 100644
+--- a/python/sglang/srt/speculative/eagle_worker_v2.py
++++ b/python/sglang/srt/speculative/eagle_worker_v2.py
+@@ -170,6 +170,7 @@ def _qsa_index_share_requested(hf_config) -> bool:
+ 
+ 
+ class EagleDraftWorker(EagleDraftWorkerBase):
++    _shared_weights_initialized = False
+     # Always-present draft dispatch. init_attention_backends resolves it before
+     # graph capture; the class default keeps __new__-based test harnesses on stock.
+     draft_runtime: eagle_megakernel.EagleDraftRuntime = (
+@@ -240,6 +241,39 @@ class EagleDraftWorker(EagleDraftWorkerBase):
+         self.tree_mask_mode = default_tree_mask_mode()
+ 
+         self.plan_stream, self.plan_stream_ctx = get_plan_stream(self.device)
++        self._maybe_share_qwen_mtp_before_pool()
++
++    def _maybe_share_qwen_mtp_before_pool(self):
++        if not envs.SGLANG_OPT_QWEN_MTP_EARLY_SHARE.get():
++            return
++        if (
++            self.speculative_algorithm != SpeculativeAlgorithm.EAGLE
++            or type(self.draft_runner.model).__name__ != "Qwen3_5ForCausalLMMTP"
++            or get_parallel().tp_size != 1
++            or get_parallel().pp_size != 1
++            or get_model().is_startup_weight_load_overlap
++            or get_spec().speculative_token_map is not None
++        ):
++            raise ValueError(
++                "Early Qwen MTP sharing requires EAGLE, TP1/PP1, synchronous "
++                "weight loading and no token map"
++            )
++        embed, _ = self._resolve_shared_embed_and_head()
++        draft_embed = self.draft_runner.model.model.embed_tokens.weight
++        if (
++            embed is None
++            or not embed.is_floating_point()
++            or embed.shape != draft_embed.shape
++            or embed.dtype != draft_embed.dtype
++        ):
++            raise ValueError("Early Qwen MTP sharing requires compatible floating embeddings")
++        # This is the existing sharing contract, moved before target-pool
++        # profiling so its replaced embedding/head are no longer charged.
++        self.init_token_map()
++        self.init_lm_head()
++        current_platform.empty_cache()
++        self._shared_weights_initialized = True
++        logger.info("Shared Qwen MTP embedding/head before target KV sizing")
+ 
+     def alloc_memory_pool(
+         self,
+@@ -255,8 +289,9 @@ class EagleDraftWorker(EagleDraftWorkerBase):
+             req_to_token_pool=req_to_token_pool,
+             token_to_kv_pool_allocator=token_to_kv_pool_allocator,
+         )
+-        self.init_token_map()
+-        self.init_lm_head()
++        if not self._shared_weights_initialized:
++            self.init_token_map()
++            self.init_lm_head()
+ 
+         if get_spec().speculative_use_rejection_sampling:
+             target_vocab_size = self.target_worker.model_config.vocab_size

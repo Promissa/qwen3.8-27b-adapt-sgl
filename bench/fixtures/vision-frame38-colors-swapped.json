@@ -1,0 +1,8 @@
+{
+  "sha256": "bfe1694a4f9e3d0b61a8af53f006b6117979f17fcf9691300be8eb5c6bdcb45f",
+  "expected_description": [
+    "blue square",
+    "red circle"
+  ],
+  "scope": "Counterfactual native fixture; color/shape association swapped, same frame number and geometry"
+}

@@ -1,0 +1,680 @@
+{
+  "status": "unmeasured candidates; each change is relative to its named control",
+  "experiments": [
+    {
+      "name": "baseline",
+      "profile": "balanced",
+      "flags": [],
+      "env": {},
+      "gate": "baseline"
+    },
+    {
+      "name": "skip-decode-lock",
+      "profile": "balanced",
+      "flags": [],
+      "env": {
+        "SGLANG_OPT_MAMBA_SKIP_DECODE_LOCK": "1"
+      },
+      "gate": "token-equality"
+    },
+    {
+      "name": "host-checkpoints",
+      "profile": "balanced",
+      "flags": [
+        "--enable-hierarchical-cache",
+        "--hicache-size",
+        "2"
+      ],
+      "env": {
+        "SGLANG_OPT_MAMBA_HOST_ONLY_CHECKPOINT": "1"
+      },
+      "gate": "token-equality"
+    },
+    {
+      "name": "graph-precarve",
+      "profile": "balanced",
+      "flags": [],
+      "env": {
+        "SGLANG_ENABLE_GRAPH_POOL_PRECARVE": "1"
+      },
+      "gate": "token-equality"
+    },
+    {
+      "name": "gdn-decode-flashinfer",
+      "profile": "balanced",
+      "flags": [
+        "--linear-attn-decode-backend",
+        "flashinfer"
+      ],
+      "env": {},
+      "gate": "token-equality"
+    },
+    {
+      "name": "gdn-prefill-flashinfer",
+      "profile": "balanced",
+      "flags": [
+        "--linear-attn-prefill-backend",
+        "flashinfer"
+      ],
+      "env": {},
+      "gate": "token-equality"
+    },
+    {
+      "name": "gemm-cutlass",
+      "profile": "balanced",
+      "flags": [
+        "--fp4-gemm-backend",
+        "flashinfer_cutlass"
+      ],
+      "env": {},
+      "gate": "token-equality"
+    },
+    {
+      "name": "gemm-cudnn",
+      "profile": "balanced",
+      "flags": [
+        "--fp4-gemm-backend",
+        "flashinfer_cudnn"
+      ],
+      "env": {},
+      "gate": "token-equality"
+    },
+    {
+      "name": "state-fp32",
+      "profile": "balanced",
+      "flags": [
+        "--mamba-ssm-dtype",
+        "float32"
+      ],
+      "env": {},
+      "gate": "full-lossy-quality"
+    },
+    {
+      "name": "kv-nvfp4",
+      "profile": "balanced",
+      "flags": [
+        "--kv-cache-dtype",
+        "nvfp4",
+        "--prefill-attention-backend",
+        "flashinfer",
+        "--decode-attention-backend",
+        "trtllm_mha"
+      ],
+      "env": {},
+      "gate": "full-lossy-quality"
+    },
+    {
+      "name": "ngram",
+      "profile": "ngram",
+      "flags": [],
+      "env": {},
+      "gate": "token-equality"
+    },
+    {
+      "name": "dspark",
+      "profile": "dspark",
+      "flags": [],
+      "env": {},
+      "gate": "token-equality"
+    },
+    {
+      "name": "dspark-verify-host-plan",
+      "control": "dspark",
+      "profile": "dspark",
+      "flags": [],
+      "env": {
+        "SGLANG_OPT_FLASHINFER_VERIFY_HOST_PLAN": "1"
+      },
+      "gate": "token-equality",
+      "applicability": "source_inactive",
+      "not_applicable_reason": "The optional flag guards EAGLE_VERIFY/topk1; DSpark uses DFLASH_VERIFY, whose host plan is installed independently of this flag.",
+      "source_audit": "docs/source-audit.md#speculative-switch-applicability"
+    },
+    {
+      "name": "dspark-fused-kda-verify",
+      "control": "dspark",
+      "profile": "dspark",
+      "flags": [],
+      "env": {
+        "SGLANG_OPT_FUSED_KDA_VERIFY": "1"
+      },
+      "gate": "token-equality",
+      "applicability": "source_inactive",
+      "not_applicable_reason": "The only consumer is KDABackend; this Qwen3.8 target uses GDN.",
+      "source_audit": "docs/source-audit.md#speculative-switch-applicability"
+    },
+    {
+      "name": "dspark-draft-host-indptr",
+      "control": "dspark",
+      "profile": "dspark",
+      "flags": [],
+      "env": {
+        "SGLANG_OPT_FLASHINFER_DRAFT_HOST_INDPTR": "1"
+      },
+      "gate": "token-equality",
+      "applicability": "source_inactive",
+      "not_applicable_reason": "The flag is read in FlashInferMultiStepDraftBackend, created by DraftBackendFactory in EAGLE workers; DSpark initializes its ordinary draft ModelRunner backend.",
+      "source_audit": "docs/source-audit.md#speculative-switch-applicability"
+    },
+    {
+      "name": "dspark-triton",
+      "control": "dspark",
+      "profile": "dspark",
+      "flags": [
+        "--attention-backend",
+        "triton"
+      ],
+      "env": {},
+      "gate": "token-equality"
+    },
+    {
+      "name": "dflash",
+      "profile": "dflash",
+      "flags": [],
+      "env": {},
+      "gate": "token-equality",
+      "requires": "Offline quantized draft, independently validated"
+    },
+    {
+      "name": "eagle-mtp-quantized",
+      "profile": "eagle",
+      "flags": [
+        "--speculative-draft-model-path",
+        "weights/reference-mtp-nvfp4",
+        "--chunked-prefill-size",
+        "1024",
+        "--max-mamba-cache-size",
+        "4",
+        "--max-total-tokens",
+        "24576",
+        "--mem-fraction-static",
+        "0.92"
+      ],
+      "env": {},
+      "gate": "token-equality",
+      "requires": "Converted external MTP; current source supports independent Qwen draft config; GPU fit and weight sharing unverified"
+    },
+    {
+      "name": "ngram-packed-verify",
+      "control": "ngram-d4-slots4",
+      "profile": "ngram",
+      "flags": [
+        "--speculative-num-draft-tokens",
+        "4",
+        "--max-mamba-cache-size",
+        "4"
+      ],
+      "env": {
+        "SGLANG_OPT_GDN_VERIFY_MATCH_PACKED": "1"
+      },
+      "gate": "token-equality",
+      "requires": "16-case GPU recurrence parity, then original target greedy/API gates before timing"
+    },
+    {
+      "name": "eagle-mtp-early-share",
+      "profile": "eagle",
+      "flags": [
+        "--speculative-draft-model-path",
+        "weights/reference-mtp-nvfp4",
+        "--chunked-prefill-size",
+        "1024",
+        "--max-mamba-cache-size",
+        "4",
+        "--max-total-tokens",
+        "24576",
+        "--mem-fraction-static",
+        "0.92"
+      ],
+      "env": {
+        "SGLANG_OPT_QWEN_MTP_EARLY_SHARE": "1"
+      },
+      "gate": "token-equality",
+      "requires": "Converted external MTP; guarded synchronous TP1/PP1 early sharing passes actual quantized-head ownership fixture; GPU memory/equality gates required",
+      "control": "eagle-mtp-quantized"
+    },
+    {
+      "name": "eagle-mtp-native",
+      "profile": "eagle-native",
+      "flags": [
+        "--speculative-draft-model-path",
+        "weights/reference-mtp-nvfp4",
+        "--chunked-prefill-size",
+        "1024",
+        "--max-mamba-cache-size",
+        "4",
+        "--max-total-tokens",
+        "24576",
+        "--mem-fraction-static",
+        "0.92"
+      ],
+      "env": {
+        "SGLANG_OPT_QWEN_MTP_EARLY_SHARE": "1"
+      },
+      "gate": "token-equality",
+      "requires": "Early sharing enabled; native GDN speculative state (ReplaySSM explicitly absent); capacity and original-token gates required",
+      "control": "eagle-mtp-early-share"
+    },
+    {
+      "name": "eagle-mtp-native-packed",
+      "profile": "eagle-native",
+      "flags": [
+        "--speculative-draft-model-path",
+        "weights/reference-mtp-nvfp4",
+        "--chunked-prefill-size",
+        "1024",
+        "--max-mamba-cache-size",
+        "4",
+        "--max-total-tokens",
+        "24576",
+        "--mem-fraction-static",
+        "0.92"
+      ],
+      "env": {
+        "SGLANG_OPT_QWEN_MTP_EARLY_SHARE": "1",
+        "SGLANG_OPT_GDN_VERIFY_MATCH_PACKED": "1"
+      },
+      "gate": "token-equality",
+      "requires": "Native MTP control plus isolated-verified GDN beta/state casts; strict full-model equality before timing",
+      "control": "eagle-mtp-native"
+    },
+    {
+      "name": "dflash-embedding-092",
+      "profile": "dflash",
+      "flags": [
+        "--model-path",
+        "weights/target-embedding-nvfp4",
+        "--mem-fraction-static",
+        "0.92",
+        "--chunked-prefill-size",
+        "1024",
+        "--max-mamba-cache-size",
+        "4",
+        "--max-total-tokens",
+        "16384"
+      ],
+      "env": {},
+      "gate": "token-equality",
+      "requires": "Retry measured smaller-target native budget failure with higher static fraction; own target strict token reference required",
+      "control": "results/probes/embedding-dflash-native/probe.json"
+    },
+    {
+      "name": "dflash-embedding-092-packed",
+      "profile": "dflash",
+      "flags": [
+        "--model-path",
+        "weights/target-embedding-nvfp4",
+        "--mem-fraction-static",
+        "0.92",
+        "--chunked-prefill-size",
+        "1024",
+        "--max-mamba-cache-size",
+        "4",
+        "--max-total-tokens",
+        "16384"
+      ],
+      "env": {
+        "SGLANG_OPT_GDN_VERIFY_MATCH_PACKED": "1"
+      },
+      "gate": "token-equality",
+      "requires": "Same smaller-target DFlash point plus isolated-verified GDN precision; full-model equality before timing",
+      "control": "dflash-embedding-092"
+    },
+    {
+      "name": "ngram-packed-conv",
+      "control": "ngram-packed-verify",
+      "profile": "ngram",
+      "flags": [
+        "--speculative-num-draft-tokens",
+        "4",
+        "--max-mamba-cache-size",
+        "4"
+      ],
+      "env": {
+        "SGLANG_OPT_GDN_VERIFY_MATCH_PACKED": "1",
+        "SGLANG_OPT_GDN_VERIFY_CONV_ORDER": "1"
+      },
+      "gate": "token-equality",
+      "requires": "Isolated16-case convolution and16-case recurrent precision parity; original full-model token gate before timing"
+    },
+    {
+      "name": "deterministic-control-flashinfer",
+      "profile": "balanced",
+      "flags": [
+        "--enable-deterministic-inference",
+        "--attention-backend",
+        "flashinfer",
+        "--linear-attn-prefill-backend",
+        "triton",
+        "--mem-fraction-static",
+        "0.92",
+        "--chunked-prefill-size",
+        "1024",
+        "--max-mamba-cache-size",
+        "4",
+        "--max-total-tokens",
+        "24576",
+        "--disable-radix-cache"
+      ],
+      "env": {
+        "SGLANG_FLASHINFER_PREFILL_SPLIT_TILE_SIZE": "1024"
+      },
+      "gate": "full-lossy-quality",
+      "requires": "Coupled deterministic configuration, original weights; capture own control, full matched quality before adoption"
+    },
+    {
+      "name": "deterministic-eagle-flashinfer",
+      "control": "deterministic-control-flashinfer",
+      "profile": "eagle-native",
+      "flags": [
+        "--enable-deterministic-inference",
+        "--attention-backend",
+        "flashinfer",
+        "--linear-attn-prefill-backend",
+        "triton",
+        "--mem-fraction-static",
+        "0.92",
+        "--chunked-prefill-size",
+        "1024",
+        "--max-mamba-cache-size",
+        "4",
+        "--max-total-tokens",
+        "24576",
+        "--disable-radix-cache",
+        "--speculative-draft-model-path",
+        "weights/reference-mtp-nvfp4"
+      ],
+      "env": {
+        "SGLANG_OPT_GDN_VERIFY_MATCH_PACKED": "1",
+        "SGLANG_OPT_GDN_VERIFY_CONV_ORDER": "1",
+        "SGLANG_OPT_QWEN_MTP_EARLY_SHARE": "1",
+        "SGLANG_FLASHINFER_PREFILL_SPLIT_TILE_SIZE": "1024"
+      },
+      "gate": "token-equality",
+      "requires": "Strict equality against same deterministic non-speculative target; full quality required before final adoption"
+    },
+    {
+      "name": "deterministic-ngram-flashinfer",
+      "control": "deterministic-control-flashinfer",
+      "profile": "ngram",
+      "flags": [
+        "--enable-deterministic-inference",
+        "--attention-backend",
+        "flashinfer",
+        "--linear-attn-prefill-backend",
+        "triton",
+        "--mem-fraction-static",
+        "0.92",
+        "--chunked-prefill-size",
+        "1024",
+        "--max-mamba-cache-size",
+        "4",
+        "--max-total-tokens",
+        "24576",
+        "--disable-radix-cache",
+        "--speculative-num-draft-tokens",
+        "4"
+      ],
+      "env": {
+        "SGLANG_OPT_GDN_VERIFY_MATCH_PACKED": "1",
+        "SGLANG_OPT_GDN_VERIFY_CONV_ORDER": "1",
+        "SGLANG_FLASHINFER_PREFILL_SPLIT_TILE_SIZE": "1024"
+      },
+      "gate": "token-equality",
+      "requires": "Strict equality against same deterministic non-speculative target; full quality required before final adoption"
+    },
+    {
+      "name": "deterministic-control-triton",
+      "profile": "balanced",
+      "flags": [
+        "--enable-deterministic-inference",
+        "--attention-backend",
+        "triton",
+        "--linear-attn-prefill-backend",
+        "triton",
+        "--mem-fraction-static",
+        "0.92",
+        "--chunked-prefill-size",
+        "1024",
+        "--max-mamba-cache-size",
+        "4",
+        "--max-total-tokens",
+        "24576"
+      ],
+      "env": {},
+      "gate": "full-lossy-quality",
+      "requires": "Coupled deterministic configuration, original weights; capture own control, full matched quality before adoption"
+    },
+    {
+      "name": "deterministic-eagle-triton",
+      "control": "deterministic-control-triton",
+      "profile": "eagle-native",
+      "flags": [
+        "--enable-deterministic-inference",
+        "--attention-backend",
+        "triton",
+        "--linear-attn-prefill-backend",
+        "triton",
+        "--mem-fraction-static",
+        "0.92",
+        "--chunked-prefill-size",
+        "1024",
+        "--max-mamba-cache-size",
+        "4",
+        "--max-total-tokens",
+        "24576",
+        "--speculative-draft-model-path",
+        "weights/reference-mtp-nvfp4"
+      ],
+      "env": {
+        "SGLANG_OPT_GDN_VERIFY_MATCH_PACKED": "1",
+        "SGLANG_OPT_GDN_VERIFY_CONV_ORDER": "1",
+        "SGLANG_OPT_QWEN_MTP_EARLY_SHARE": "1"
+      },
+      "gate": "token-equality",
+      "requires": "Strict equality against same deterministic non-speculative target; full quality required before final adoption"
+    },
+    {
+      "name": "deterministic-ngram-triton",
+      "control": "deterministic-control-triton",
+      "profile": "ngram",
+      "flags": [
+        "--enable-deterministic-inference",
+        "--attention-backend",
+        "triton",
+        "--linear-attn-prefill-backend",
+        "triton",
+        "--mem-fraction-static",
+        "0.92",
+        "--chunked-prefill-size",
+        "1024",
+        "--max-mamba-cache-size",
+        "4",
+        "--max-total-tokens",
+        "24576",
+        "--speculative-num-draft-tokens",
+        "4"
+      ],
+      "env": {
+        "SGLANG_OPT_GDN_VERIFY_MATCH_PACKED": "1",
+        "SGLANG_OPT_GDN_VERIFY_CONV_ORDER": "1"
+      },
+      "gate": "token-equality",
+      "requires": "Strict equality against same deterministic non-speculative target; full quality required before final adoption"
+    },
+    {
+      "name": "deterministic-embedding-control-flashinfer",
+      "profile": "balanced",
+      "flags": [
+        "--model-path",
+        "weights/target-embedding-nvfp4",
+        "--enable-deterministic-inference",
+        "--attention-backend",
+        "flashinfer",
+        "--linear-attn-prefill-backend",
+        "triton",
+        "--mem-fraction-static",
+        "0.92",
+        "--chunked-prefill-size",
+        "1024",
+        "--max-mamba-cache-size",
+        "8",
+        "--max-total-tokens",
+        "24576",
+        "--disable-radix-cache"
+      ],
+      "env": {
+        "SGLANG_FLASHINFER_PREFILL_SPLIT_TILE_SIZE": "1024"
+      },
+      "gate": "full-lossy-quality",
+      "requires": "Own embedding-target deterministic control; full matched quality before adoption. Eight slots match the DSpark probe override."
+    },
+    {
+      "name": "deterministic-embedding-dspark-flashinfer",
+      "control": "deterministic-embedding-control-flashinfer",
+      "profile": "dspark",
+      "flags": [
+        "--model-path",
+        "weights/target-embedding-nvfp4",
+        "--enable-deterministic-inference",
+        "--attention-backend",
+        "flashinfer",
+        "--linear-attn-prefill-backend",
+        "triton",
+        "--mem-fraction-static",
+        "0.92",
+        "--chunked-prefill-size",
+        "1024",
+        "--max-mamba-cache-size",
+        "8",
+        "--max-total-tokens",
+        "24576",
+        "--disable-radix-cache"
+      ],
+      "env": {
+        "SGLANG_OPT_GDN_VERIFY_MATCH_PACKED": "1",
+        "SGLANG_OPT_GDN_VERIFY_CONV_ORDER": "1",
+        "SGLANG_FLASHINFER_PREFILL_SPLIT_TILE_SIZE": "1024"
+      },
+      "gate": "token-equality",
+      "requires": "Argument layer has no direct deterministic-mode prohibition for this CUDA path; live capacity/API/retrieval and strict own-control equality remain mandatory. No quantized-embedding MTP early-sharing flag."
+    },
+    {
+      "name": "deterministic-embedding-dflash-flashinfer",
+      "control": "deterministic-embedding-control-flashinfer",
+      "profile": "dflash",
+      "flags": [
+        "--model-path",
+        "weights/target-embedding-nvfp4",
+        "--enable-deterministic-inference",
+        "--attention-backend",
+        "flashinfer",
+        "--linear-attn-prefill-backend",
+        "triton",
+        "--mem-fraction-static",
+        "0.92",
+        "--chunked-prefill-size",
+        "1024",
+        "--max-mamba-cache-size",
+        "8",
+        "--max-total-tokens",
+        "24576",
+        "--disable-radix-cache"
+      ],
+      "env": {
+        "SGLANG_OPT_GDN_VERIFY_MATCH_PACKED": "1",
+        "SGLANG_OPT_GDN_VERIFY_CONV_ORDER": "1",
+        "SGLANG_FLASHINFER_PREFILL_SPLIT_TILE_SIZE": "1024"
+      },
+      "gate": "token-equality",
+      "requires": "Argument layer has no direct deterministic-mode prohibition for this CUDA path; live capacity/API/retrieval and strict own-control equality remain mandatory. No quantized-embedding MTP early-sharing flag."
+    },
+    {
+      "name": "deterministic-control-triton-eager",
+      "profile": "balanced",
+      "flags": [
+        "--enable-deterministic-inference",
+        "--attention-backend",
+        "triton",
+        "--linear-attn-prefill-backend",
+        "triton",
+        "--mem-fraction-static",
+        "0.92",
+        "--chunked-prefill-size",
+        "1024",
+        "--max-mamba-cache-size",
+        "4",
+        "--max-total-tokens",
+        "24576",
+        "--cuda-graph-config",
+        "{\"prefill\":{\"backend\":\"disabled\"},\"decode\":{\"backend\":\"disabled\"}}"
+      ],
+      "env": {},
+      "gate": "full-lossy-quality",
+      "requires": "Coupled deterministic configuration, original weights; capture own control, full matched quality before adoption",
+      "description": "Paired eager execution diagnostic; disable both graph phases, require own control before benchmarks"
+    },
+    {
+      "name": "deterministic-eagle-triton-eager",
+      "control": "deterministic-control-triton-eager",
+      "profile": "eagle-native",
+      "flags": [
+        "--enable-deterministic-inference",
+        "--attention-backend",
+        "triton",
+        "--linear-attn-prefill-backend",
+        "triton",
+        "--mem-fraction-static",
+        "0.92",
+        "--chunked-prefill-size",
+        "1024",
+        "--max-mamba-cache-size",
+        "4",
+        "--max-total-tokens",
+        "24576",
+        "--speculative-draft-model-path",
+        "weights/reference-mtp-nvfp4",
+        "--cuda-graph-config",
+        "{\"prefill\":{\"backend\":\"disabled\"},\"decode\":{\"backend\":\"disabled\"}}"
+      ],
+      "env": {
+        "SGLANG_OPT_GDN_VERIFY_MATCH_PACKED": "1",
+        "SGLANG_OPT_GDN_VERIFY_CONV_ORDER": "1",
+        "SGLANG_OPT_QWEN_MTP_EARLY_SHARE": "1"
+      },
+      "gate": "token-equality",
+      "requires": "Strict equality against same deterministic non-speculative target; full quality required before final adoption",
+      "description": "Paired eager execution diagnostic; disable both graph phases, require own control before benchmarks"
+    },
+    {
+      "name": "deterministic-ngram-triton-eager",
+      "control": "deterministic-control-triton-eager",
+      "profile": "ngram",
+      "flags": [
+        "--enable-deterministic-inference",
+        "--attention-backend",
+        "triton",
+        "--linear-attn-prefill-backend",
+        "triton",
+        "--mem-fraction-static",
+        "0.92",
+        "--chunked-prefill-size",
+        "1024",
+        "--max-mamba-cache-size",
+        "4",
+        "--max-total-tokens",
+        "24576",
+        "--speculative-num-draft-tokens",
+        "4",
+        "--cuda-graph-config",
+        "{\"prefill\":{\"backend\":\"disabled\"},\"decode\":{\"backend\":\"disabled\"}}"
+      ],
+      "env": {
+        "SGLANG_OPT_GDN_VERIFY_MATCH_PACKED": "1",
+        "SGLANG_OPT_GDN_VERIFY_CONV_ORDER": "1"
+      },
+      "gate": "token-equality",
+      "requires": "Strict equality against same deterministic non-speculative target; full quality required before final adoption",
+      "description": "Paired eager execution diagnostic; disable both graph phases, require own control before benchmarks"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "sha256": "cb238edee2c25d820619700d40daf8e329edcb9fcf71d43d5800ee5bd9ccc5c9",
+  "expected_description": [
+    "red square",
+    "blue circle"
+  ],
+  "frame": 26,
+  "scope": "Exact hash match to retained r3 failed request image"
+}

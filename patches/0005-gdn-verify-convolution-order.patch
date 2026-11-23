@@ -1,0 +1,118 @@
+--- a/python/sglang/srt/environ.py
++++ b/python/sglang/srt/environ.py
+@@ -1727,6 +1727,8 @@
+     SGLANG_OPT_FUSED_KDA_VERIFY = EnvBool(False)
+     # Match packed GDN decode's beta cast and persisted BF16 state in verify.
+     SGLANG_OPT_GDN_VERIFY_MATCH_PACKED = EnvBool(False)
++    # Preserve decode's oldest-to-newest Conv1D sum in GDN tree verification.
++    SGLANG_OPT_GDN_VERIFY_CONV_ORDER = EnvBool(False)
+     # A/B: keep the DFLASH draft greedy head eager (not folded in-graph).
+     SGLANG_DFLASH_EAGER_DRAFT_SAMPLER = EnvBool(False)
+     SGLANG_ENABLE_LILICORR_SAMPLING = EnvBool(False)
+diff --git a/python/sglang/kernels/ops/mamba/causal_conv1d_triton.py b/python/sglang/kernels/ops/mamba/causal_conv1d_triton.py
+index 08ddf2f72a..fd0c8f3482 100644
+--- a/python/sglang/kernels/ops/mamba/causal_conv1d_triton.py
++++ b/python/sglang/kernels/ops/mamba/causal_conv1d_triton.py
+@@ -694,6 +694,7 @@ def _causal_conv1d_update_kernel(
+     USE_GDC: tl.constexpr = False,
+     DEDUP_CONV_WINDOW: tl.constexpr = False,
+     NP2_WINDOW_COLS: tl.constexpr = 1,
++    MATCH_SEQUENTIAL_UPDATE: tl.constexpr = False,
+ ):
+     # ruff: noqa: E501
+     if USE_GDC:
+@@ -920,6 +921,11 @@ def _causal_conv1d_update_kernel(
+                     parent_idx_tokens,
+                 )
+ 
++            if MATCH_SEQUENTIAL_UPDATE:
++                term0 = tl.zeros((BLOCK_N,), dtype=x_ptr.dtype.element_ty)
++                term1 = term0
++                term2 = term0
++                term3 = term0
+             _idx_token = idx_token
+             x_ptrs_1d = x_base_1d + _idx_token * stride_x_token  # [BLOCK_N]
+             matrix_x = tl.load(x_ptrs_1d, mask=mask_x_1d)
+@@ -965,7 +971,19 @@ def _causal_conv1d_update_kernel(
+                             mask=mask_w,
+                         )
+ 
+-                acc += matrix_x * matrix_w
++                if MATCH_SEQUENTIAL_UPDATE:
++                    # Tree traversal visits newest first; retain operand dtype
++                    # and sum in decode's oldest-first order below.
++                    if j == 0:
++                        term3 = matrix_x * matrix_w
++                    elif j == 1:
++                        term2 = matrix_x * matrix_w
++                    elif j == 2:
++                        term1 = matrix_x * matrix_w
++                    else:
++                        term0 = matrix_x * matrix_w
++                else:
++                    acc += matrix_x * matrix_w
+ 
+                 # move to parent for next iteration
+                 if _idx_token > 0:
+@@ -992,6 +1010,11 @@ def _causal_conv1d_update_kernel(
+                         else:
+                             matrix_x = col0
+                     _idx_token = _idx_token - 1
++            if MATCH_SEQUENTIAL_UPDATE:
++                acc += term0
++                acc += term1
++                acc += term2
++                acc += term3
+         else:
+             matrix_w = w_col0
+             matrix_x = col0
+@@ -1092,6 +1115,7 @@ def causal_conv1d_update(
+     pad_slot_id: int = PAD_SLOT_ID,
+     metadata=None,
+     validate_data=False,
++    match_sequential_update=False,
+ ):
+     """
+     x: (batch, dim) or (batch, dim, seqlen)
+@@ -1131,6 +1155,11 @@ def causal_conv1d_update(
+         x = x.unsqueeze(-1)
+     batch, dim, seqlen = x.shape
+     _, width = weight.shape
++    if match_sequential_update and (
++        not x.is_cuda or width != 4 or cache_seqlens is not None
++        or any(tensor.dtype != torch.bfloat16 for tensor in (x, weight, conv_state))
++    ):
++        raise ValueError("Sequential Conv1D matching is validated only for CUDA BF16 width4 without circular state")
+     # conv_state: (..., dim, state_len), where state_len >= width - 1
+     num_cache_lines, _, state_len = conv_state.size()
+ 
+@@ -1298,6 +1327,7 @@ def causal_conv1d_update(
+         NP2_WINDOW_COLS=(
+             triton.next_power_of_2(seqlen + width - 2) if dedup_conv_window else 1
+         ),
++        MATCH_SEQUENTIAL_UPDATE=match_sequential_update,
+         **pdl_kwargs,
+     )
+     if unsqueeze:
+diff --git a/python/sglang/srt/layers/attention/linear/gdn_backend.py b/python/sglang/srt/layers/attention/linear/gdn_backend.py
+index ec4ca747a8..d07c2f8ecb 100644
+--- a/python/sglang/srt/layers/attention/linear/gdn_backend.py
++++ b/python/sglang/srt/layers/attention/linear/gdn_backend.py
+@@ -1313,6 +1313,9 @@ class GDNAttnBackend(MambaAttnBackendBase):
+             mixed_qkv_reshaped = mixed_qkv.view(
+                 batch_size, draft_token_num, -1
+             ).transpose(1, 2)
++            conv_precision_kwargs = {}
++            if envs.SGLANG_OPT_GDN_VERIFY_CONV_ORDER.get():
++                conv_precision_kwargs["match_sequential_update"] = True
+             mixed_qkv_processed = causal_conv1d_update(
+                 mixed_qkv_reshaped,
+                 conv_states,
+@@ -1325,6 +1328,7 @@ class GDNAttnBackend(MambaAttnBackendBase):
+                 retrieve_next_token=retrieve_next_token,
+                 retrieve_next_sibling=retrieve_next_sibling,
+                 retrieve_parent_token=retrieve_parent_token,
++                **conv_precision_kwargs,
+             )
+             mixed_qkv = mixed_qkv_processed.transpose(1, 2).view(seq_len, -1)
+         else:

@@ -1,0 +1,13 @@
+.venv/
+.cache/
+.codegraph/
+.ruff_cache/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+engine/
+weights/*
+!weights/.gitkeep
+results/*
+!results/ledger.md
+codex-session-*.md

@@ -1,0 +1,67 @@
+diff --git a/python/sglang/srt/models/qwen3_5.py b/python/sglang/srt/models/qwen3_5.py
+index 442b3f68db..63e6641be8 100644
+--- a/python/sglang/srt/models/qwen3_5.py
++++ b/python/sglang/srt/models/qwen3_5.py
+@@ -1794,7 +1794,11 @@ class Qwen3_5ForCausalLM(nn.Module):
+         alt_stream = get_stream("alt") if _is_cuda or _hip_use_alt_stream else None
+ 
+         # Embedding layer
+-        self.embed_tokens = self._build_embed_tokens(config)
++        self.embed_tokens = self._build_embed_tokens(
++            config,
++            quant_config=quant_config,
++            prefix=add_prefix("embed_tokens", prefix),
++        )
+ 
+         # Decoder layers
+         def get_layer(idx: int, prefix: str):
+@@ -1867,7 +1871,12 @@ class Qwen3_5ForCausalLM(nn.Module):
+ 
+         self.layers_to_capture = []
+ 
+-    def _build_embed_tokens(self, config: Qwen3_5TextConfig) -> nn.Module:
++    def _build_embed_tokens(
++        self,
++        config: Qwen3_5TextConfig,
++        quant_config: Optional[QuantizationConfig] = None,
++        prefix: str = "",
++    ) -> nn.Module:
+         """Embedding sharding hook for models reusing this backbone."""
+         if not self.pp_group.is_first_rank:
+             return PPMissingLayer()
+@@ -1876,6 +1885,8 @@ class Qwen3_5ForCausalLM(nn.Module):
+             config.hidden_size,
+             org_num_embeddings=config.vocab_size,
+             enable_tp=not is_dp_attention_enabled(),
++            quant_config=quant_config,
++            prefix=prefix,
+         )
+ 
+     def get_input_embeddings(self):
+diff --git a/python/sglang/srt/models/qwen4_exp.py b/python/sglang/srt/models/qwen4_exp.py
+index 28e55f119e..ed9175c22f 100644
+--- a/python/sglang/srt/models/qwen4_exp.py
++++ b/python/sglang/srt/models/qwen4_exp.py
+@@ -2033,7 +2033,12 @@ ALL_DECODER_LAYER_TYPES = {
+ class Qwen4ExpModel(Qwen3_5ForCausalLM):
+     decoder_layer_types = ALL_DECODER_LAYER_TYPES
+ 
+-    def _build_embed_tokens(self, config: Qwen4ExpTextConfig) -> nn.Module:
++    def _build_embed_tokens(
++        self,
++        config: Qwen4ExpTextConfig,
++        quant_config: Optional[QuantizationConfig] = None,
++        prefix: str = "",
++    ) -> nn.Module:
+         if not self.pp_group.is_first_rank:
+             return PPMissingLayer()
+         return VocabParallelEmbedding(
+@@ -2041,6 +2046,8 @@ class Qwen4ExpModel(Qwen3_5ForCausalLM):
+             config.hidden_size,
+             org_num_embeddings=config.vocab_size,
+             use_attn_tp_group=is_dp_attention_enabled(),
++            quant_config=quant_config,
++            prefix=prefix,
+         )
+ 
+     def __init__(
